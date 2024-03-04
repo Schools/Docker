@@ -1,0 +1,93 @@
+---
+version: '3.7'
+# Networking will be done by the test container docker compose library.
+# In case if you want to run your test against docker container uncomment the network lines.
+services:
+  cockroach:
+    hostname: cockroach
+    image: cockroachdb/cockroach:v23.1.13
+    command:
+      - start-single-node
+      - --host=:26257
+      - --listen-addr=:26257
+      - --http-addr=:8082
+      - --certs-dir=/tmp/certs
+    environment:
+      - COCKROACH_DATABASE=cockroachdb
+      - COCKROACH_USER=croachadmin
+      - COCKROACH_PASSWORD=password1
+    volumes:
+      - cockroach-data:/var/lib/roach1
+    healthcheck:
+      test: [ "CMD", "curl", "-k", "https://localhost:8082/health" ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    networks:
+      - temporal-network
+    ports:
+      - "26257:26257"
+      - "8082:8082"
+  temporal:
+    depends_on:
+      cockroach:
+        condition: service_healthy
+    environment:
+      - DB=postgresql
+      - SQL_TLS=true
+      - SQL_TLS_DISABLE_HOST_VERIFICATION=true
+      - SQL_TLS_ENABLED=true
+      - DB_PORT=26257
+      - POSTGRES_USER=croachadmin
+      - POSTGRES_PWD=password1
+      - POSTGRES_SEEDS=postgres
+      - DYNAMIC_CONFIG_FILE_PATH=config/dynamicconfig/development-sql.yaml
+    image: temporalio/auto-setup:1.22.4.0
+    links:
+      - cockroach:postgres
+    volumes:
+      - ./config/dynamicconfig:/etc/temporal/config/dynamicconfig
+    healthcheck:
+      test: [ "CMD", "nc", "-zv", "temporal", "7233" ]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    labels:
+      compose.volume.type: configMap
+    networks:
+     - temporal-network
+    ports:
+       - "7233:7233"
+    stdin_open: true
+    tty: true
+  temporal-ui:
+    depends_on:
+      temporal:
+        condition: service_healthy
+    environment:
+      - TEMPORAL_ADDRESS=temporal:7233
+      - TEMPORAL_CORS_ORIGINS=http://localhost:3000
+    image: temporalio/ui:2.23.0
+    networks:
+      - temporal-network
+    ports:
+      - "8088:8080"
+  minio:
+    image: minio/minio
+    ports:
+      - "9990:9000"
+      - "9991:9001"
+    volumes:
+      - minio_storage:/data
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    command: server --console-address ":9001" /data
+
+networks:
+  temporal-network:
+    driver: bridge
+    name: temporal-network
+volumes:
+  cockroach-data: { }
+  minio_storage: { }
